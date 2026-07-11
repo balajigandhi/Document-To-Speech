@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki TTS
 // @namespace    ai-tts-tools
-// @version      5.13
+// @version      5.15
 // @description  Read wiki page content aloud via local TTS sidecar (localhost:8080)
 // @author       bgandhi
 // @match        https://*.wikipedia.org/wiki/*
@@ -16,9 +16,10 @@
 (function () {
   'use strict';
 
-  const API_FROM_HTML  = 'http://localhost:8080/tts/from-html';
-  const API_SENTENCES  = 'http://localhost:8080/sentences';
+  const API_FROM_HTML   = 'http://localhost:8080/tts/from-html';
+  const API_SENTENCES   = 'http://localhost:8080/sentences';
   const API_CACHE_CLEAR = 'http://localhost:8080/cache/clear';
+  const API_CACHE_EXPIRE = 'http://localhost:8080/cache/expire';
   const VOICE          = 'af_sarah';
   const BOUNDARY       = 'tts_boundary';
   const AVG_SECS_PER_SENTENCE = 4.5; // rough average sentence audio duration
@@ -79,7 +80,9 @@
       white-space: nowrap;
       flex-shrink: 0;
     }
-    #tts-btn-play:disabled { opacity: 0.45; cursor: default; }
+    #tts-btn-play:disabled,
+    #tts-btn-stop:disabled,
+    #tts-btn-refresh:disabled { opacity: 0.45; cursor: default; pointer-events: none; }
     #tts-btn-stop {
       background: none;
       border: 1px solid #ccc;
@@ -237,7 +240,7 @@
   // ── Panel state ──────────────────────────────────────────────────────────────
 
   let panel = null;
-  let playBtn, progressRow, progressFill, progressLabel, bodyEl, timeEstEl;
+  let playBtn, stopBtn, refreshBtn, progressRow, progressFill, progressLabel, bodyEl, timeEstEl;
   let spans = [];
   let currentSentences = [];
 
@@ -274,13 +277,13 @@
     playBtn.id = 'tts-btn-play';
     playBtn.textContent = '▶ Play';
 
-    const stopBtn = document.createElement('button');
+    stopBtn = document.createElement('button');
     stopBtn.id = 'tts-btn-stop';
     stopBtn.textContent = '⏹';
     stopBtn.title = 'Stop';
     stopBtn.onclick = () => stopPlayback();
 
-    const refreshBtn = document.createElement('button');
+    refreshBtn = document.createElement('button');
     refreshBtn.id = 'tts-btn-refresh';
     refreshBtn.textContent = '↺';
     refreshBtn.title = 'Clear cache and re-generate';
@@ -418,6 +421,12 @@
         playerLoop(totalSentences || audioQueue.length);
       }
     };
+  }
+
+  function setProcessing(busy) {
+    if (playBtn)    { playBtn.disabled    = busy; }
+    if (stopBtn)    { stopBtn.disabled    = busy; }
+    if (refreshBtn) { refreshBtn.disabled = busy; }
   }
 
   function setProgress(done, total) {
@@ -693,8 +702,8 @@
     audioQueue     = [];
     generationDone = false;
     totalSentences = knownTotal;
-    playBtn.textContent = '▶ Play';
-    playBtn.disabled    = false;
+    if (playBtn) playBtn.textContent = '▶ Play';
+    setProcessing(true);
 
     // Show progress bar immediately
     if (progressRow) {
@@ -773,6 +782,7 @@
         }
 
         generationDone = true;
+        setProcessing(false);
         setProgress(parsedCount, totalSentences);
         progressLabel.textContent = `Ready — ${parsedCount} sentences`;
         // Signal player if it's already running
@@ -780,7 +790,8 @@
       },
 
       onerror() {
-        playBtn.textContent = '▶ Play'; playBtn.disabled = false;
+        setProcessing(false);
+        if (playBtn) playBtn.textContent = '▶ Play';
         alert('Cannot reach localhost:8080 — is the sidecar running?');
       },
     });
@@ -788,7 +799,7 @@
 
   // ── Trigger button ────────────────────────────────────────────────────────────
 
-  const VERSION = '5.13';
+  const VERSION = '5.15';
 
   const trigger = document.createElement('button');
   trigger.id = 'tts-trigger';
@@ -817,8 +828,11 @@
     if (panel) { panel.remove(); panel = null; return; }
     const html = extractHTML();
 
+    // Fire-and-forget: purge cache entries older than 7 days
+    GM_xmlhttpRequest({ method: 'POST', url: API_CACHE_EXPIRE });
+
     buildPanel(['Loading…']);
-    playBtn.disabled = true;
+    setProcessing(true);
 
     GM_xmlhttpRequest({
       method:  'POST',
@@ -826,7 +840,11 @@
       headers: { 'Content-Type': 'application/json' },
       data:    JSON.stringify({ html }),
       onload(res) {
-        if (res.status !== 200) { buildPanel(['Failed to extract text.']); return; }
+        if (res.status !== 200) {
+          buildPanel(['Failed to extract text.']);
+          setProcessing(false);
+          return;
+        }
         const { sentences, count } = JSON.parse(res.responseText);
         buildPanel(sentences);
         // Auto-start generation — audio queues in background while user reads
@@ -835,6 +853,7 @@
       onerror() {
         setTriggerState(false);
         buildPanel(['Cannot reach localhost:8080 — start the sidecar first.']);
+        setProcessing(false);
       },
     });
   };

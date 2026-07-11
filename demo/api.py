@@ -13,6 +13,7 @@ import base64
 import hashlib
 import io
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -267,6 +268,21 @@ def cache_clear(request: ClearCacheRequest):
             path.unlink()
             deleted += 1
     return {"deleted": deleted, "total": len(request.sentences)}
+
+
+CACHE_MAX_AGE_SECS = 7 * 24 * 3600  # 1 week
+
+
+@app.post("/cache/expire")
+def cache_expire():
+    """Delete cached WAV files not accessed in the last 7 days."""
+    cutoff = time.time() - CACHE_MAX_AGE_SECS
+    deleted = 0
+    for path in CACHE_DIR.glob("*.wav"):
+        if path.stat().st_atime < cutoff:
+            path.unlink()
+            deleted += 1
+    return {"deleted": deleted}
 
 
 @app.get("/health")
