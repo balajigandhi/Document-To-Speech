@@ -97,7 +97,10 @@ def load_docx(docx_file: str | UploadedFile) -> str | None:
 
 def load_url(url: str) -> str | None:
     try:
-        response = requests.get(url)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         return response.text
     except Exception as e:

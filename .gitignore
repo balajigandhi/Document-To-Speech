@@ -184,3 +184,4 @@ cython_debug/
 
 # VS files
 .DS_Store
+demo/tts_cache/
