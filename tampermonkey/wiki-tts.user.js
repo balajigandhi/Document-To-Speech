@@ -24,7 +24,7 @@
   const BOUNDARY       = 'tts_boundary';
   const AVG_SECS_PER_SENTENCE = 4.5; // rough average sentence audio duration
 
-  let currentSpeed = 1.5;
+  let currentSpeed = 1.35;
 
   // ── Styles ──────────────────────────────────────────────────────────────────
 
