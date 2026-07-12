@@ -44,7 +44,7 @@ _tts_model: TTSModel | None = None
 SAMPLE_RATE = 24000
 BOUNDARY = b"tts_boundary"
 
-CACHE_DIR = Path(__file__).parent / "tts_cache"
+CACHE_DIR = Path("/tmp/tts_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 
@@ -283,6 +283,13 @@ def cache_expire():
             path.unlink()
             deleted += 1
     return {"deleted": deleted}
+
+
+@app.get("/cache/stats")
+def cache_stats():
+    files = list(CACHE_DIR.glob("*.wav"))
+    total_bytes = sum(f.stat().st_size for f in files)
+    return {"files": len(files), "bytes": total_bytes, "mb": round(total_bytes / 1024 / 1024, 1)}
 
 
 @app.get("/health")
