@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki TTS
 // @namespace    ai-tts-tools
-// @version      5.23
+// @version      5.25
 // @description  Read wiki page content aloud via local TTS sidecar (localhost:8080)
 // @author       bgandhi
 // @match        https://*.wikipedia.org/wiki/*
@@ -16,7 +16,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '5.23';
+  const VERSION = '5.25';
 
   const API_FROM_HTML    = 'http://localhost:8080/tts/from-html';
   const API_SENTENCES    = 'http://localhost:8080/sentences';
@@ -121,6 +121,15 @@
     }
     #tts-status-row { display: none; }
     #tts-status { font-size: 11px; color: #888; }
+    /* Clickable blocks */
+    .tts-seekable {
+      cursor: pointer;
+    }
+    .tts-seekable:hover {
+      background: rgba(26,115,232,0.06) !important;
+      border-left: 3px solid rgba(26,115,232,0.3) !important;
+      padding-left: 6px !important;
+    }
     /* Page highlight */
     .tts-reading {
       background: #fff9c4 !important;
@@ -175,48 +184,79 @@
     );
   }
 
-  // ── Page highlight (block-ancestor approach) ──────────────────────────────────
+  // ── Page highlight (position-aware index map) ─────────────────────────────────
+  //
+  // Built once when sentences are known. Maps sentenceIndex → DOM block element.
+  // Greedily walks page blocks in DOM order, assigning each sentence to the first
+  // block whose normalized textContent contains the sentence's needle.
+  // Playback highlights by index — no repeated search, handles duplicates correctly.
 
-  const BLOCK_TAGS = new Set(['P','LI','H1','H2','H3','H4','H5','H6','TD','TH','BLOCKQUOTE','PRE','DT','DD']);
   let activeHighlight = null;
-
-  function findBlockAncestor(el) {
-    let node = el;
-    while (node && node !== document.body) {
-      if (BLOCK_TAGS.has(node.tagName)) return node;
-      node = node.parentElement;
-    }
-    return el;
-  }
+  let sentenceBlockMap = []; // index → DOM element (or null if no match)
 
   function normalize(str) {
     return str.replace(/[-–—]/g, ' ').replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 
-  function highlightPageSentence(sentence) {
+  // blockClickHandlers: keep refs so we can remove them on rebuild
+  let blockClickHandlers = [];
+
+  function buildSentenceBlockMap(sentences) {
+    // Remove previous click handlers and styles
+    blockClickHandlers.forEach(({ el, fn }) => {
+      el.removeEventListener('click', fn);
+      el.classList.remove('tts-seekable');
+    });
+    blockClickHandlers = [];
+
+    sentenceBlockMap = [];
+    const root = getContentRoot();
+    const blocks = Array.from(root.querySelectorAll(
+      'p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, dt, dd'
+    ));
+
+    const blockNorm = blocks.map(b => normalize(b.textContent));
+    let blockCursor = 0;
+
+    for (let si = 0; si < sentences.length; si++) {
+      const needle = normalize(sentences[si]).slice(0, 50);
+      if (!needle || needle.length < 6) { sentenceBlockMap.push(null); continue; }
+
+      let found = null;
+      for (let i = blockCursor; i < blocks.length; i++) {
+        if (blockNorm[i].includes(needle)) {
+          found = blocks[i];
+          blockCursor = i;
+          break;
+        }
+      }
+      sentenceBlockMap.push(found);
+
+      if (found) {
+        const idx = si;
+        const fn = (e) => {
+          // Only seek if TTS is loaded (generationDone or audioQueue has items)
+          if (audioQueue.length === 0 && !generationDone) return;
+          e.stopPropagation();
+          seekTo(idx);
+        };
+        found.addEventListener('click', fn);
+        found.classList.add('tts-seekable');
+        blockClickHandlers.push({ el: found, fn });
+      }
+    }
+  }
+
+  function highlightByIndex(idx) {
     if (activeHighlight) {
       activeHighlight.classList.remove('tts-reading');
       activeHighlight = null;
     }
-    if (!sentence || sentence.length < 8) return;
-
-    // Use first 50 chars of normalized sentence as needle — long enough to be
-    // unique, short enough to survive partial text-node splits at sentence end.
-    const needle = normalize(sentence).slice(0, 50);
-    if (!needle) return;
-
-    const root = getContentRoot();
-    // Query all block elements and match against their full textContent.
-    // This handles sentences split across inline elements (span, strong, a, etc.)
-    const blocks = root.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, pre, dt, dd');
-    for (const block of blocks) {
-      if (normalize(block.textContent).includes(needle)) {
-        block.classList.add('tts-reading');
-        block.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        activeHighlight = block;
-        return;
-      }
-    }
+    const el = sentenceBlockMap[idx];
+    if (!el) return;
+    el.classList.add('tts-reading');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    activeHighlight = el;
   }
 
   function clearPageHighlight() {
@@ -278,7 +318,7 @@
         url:     API_CACHE_CLEAR,
         headers: { 'Content-Type': 'application/json' },
         data:    JSON.stringify({ sentences: currentSentences, voice_profile: VOICE, speed: currentSpeed }),
-        onload()  { refreshBtn.textContent = '↺'; startTTS(extractHTML(), currentSentences.length); },
+        onload()  { refreshBtn.textContent = '↺'; buildSentenceBlockMap(currentSentences); startTTS(extractHTML(), currentSentences.length); },
         onerror() { refreshBtn.textContent = '↺'; setProcessing(false); },
       });
     };
@@ -286,7 +326,12 @@
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '✕';
     closeBtn.title = 'Close';
-    closeBtn.onclick = () => { stopPlayback(); bar.remove(); bar = null; };
+    closeBtn.onclick = () => {
+      stopPlayback();
+      blockClickHandlers.forEach(({ el, fn }) => { el.removeEventListener('click', fn); el.classList.remove('tts-seekable'); });
+      blockClickHandlers = [];
+      bar.remove(); bar = null;
+    };
 
     // Speed
     const speedLbl = document.createElement('span');
@@ -391,6 +436,7 @@
   let queueResolve   = null;
   let pauseResolve   = null;
   let totalSentences = 0;
+  let seekIndex      = -1; // -1 = no seek pending
 
   let timerInterval  = null;
   let timerElapsed   = 0;
@@ -423,6 +469,7 @@
   function stopPlayback() {
     stopped = true;
     paused  = false;
+    seekIndex = -1;
     if (currentAudio) { currentAudio.pause(); currentAudio = null; }
     audioQueue = [];
     if (queueResolve) { queueResolve(); queueResolve = null; }
@@ -451,6 +498,23 @@
     return new Promise(resolve => { pauseResolve = resolve; });
   }
 
+  function seekTo(idx) {
+    seekIndex = idx;
+    // Interrupt current audio — playerLoop will catch seekIndex on next iteration
+    if (currentAudio) { currentAudio.pause(); currentAudio.dispatchEvent(new Event('ended')); }
+    // If paused waiting for resume, unblock
+    if (pauseResolve) { pauseResolve(); pauseResolve = null; }
+    // If waiting for a chunk, unblock
+    if (queueResolve) { queueResolve(); queueResolve = null; }
+    // Ensure playback is running (user may have not pressed Play yet)
+    if (stopped || playBtn.textContent === '▶ Play') {
+      stopped = false; paused = false;
+      playBtn.textContent = '⏸ Pause';
+      startTimer(Math.round(((totalSentences - idx) * AVG_SECS_PER_SENTENCE) / currentSpeed));
+      playerLoop(totalSentences);
+    }
+  }
+
   function pushChunk(chunk) {
     audioQueue.push(chunk);
     if (queueResolve) { queueResolve(); queueResolve = null; }
@@ -477,11 +541,29 @@
     while (!stopped && played < total) {
       if (paused && !currentAudio) await waitForResume();
       if (stopped) break;
+
+      // Handle seek: discard queued chunks before target index
+      if (seekIndex >= 0) {
+        const target = seekIndex;
+        seekIndex = -1;
+        played = target;
+        // Drop buffered chunks with idx < target
+        audioQueue = audioQueue.filter(c => c.idx >= target);
+        if (queueResolve) { queueResolve(); queueResolve = null; }
+      }
+
       if (audioQueue.length === 0) await waitForChunk();
       if (stopped) break;
 
+      // Re-check seek after waiting (seek may have arrived while waiting for chunk)
+      if (seekIndex >= 0) continue;
+
       const chunk = audioQueue.shift();
-      highlightPageSentence(chunk.sentence);
+      // Skip chunk if it's behind the current play position (can happen after seek)
+      if (chunk.idx < played) continue;
+      played = chunk.idx;
+
+      highlightByIndex(chunk.idx);
       setStatus(chunk.sentence.slice(0, 50) + (chunk.sentence.length > 50 ? '…' : ''));
       await playWav(chunk.wav);
 
@@ -715,6 +797,7 @@
         if (res.status !== 200) { setStatus('Failed to extract text'); setProcessing(false); return; }
         const { sentences, count } = JSON.parse(res.responseText);
         currentSentences = sentences;
+        buildSentenceBlockMap(sentences);
         setStatus(`${count} sentences — generating…`);
         startTTS(extractHTML(), count);
       },
