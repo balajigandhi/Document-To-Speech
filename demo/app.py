@@ -41,7 +41,7 @@ def numpy_to_wav(audio_array: np.ndarray, sample_rate: int) -> io.BytesIO:
     Convert a numpy array to audio bytes in .wav format, ready to save into a file.
     """
     wav_io = io.BytesIO()
-    sf.write(wav_io, audio_array, sample_rate, format="WAV")
+    sf.write(wav_io, audio_array, sample_rate, format="WAV", subtype="PCM_16")
     wav_io.seek(0)
     return wav_io
 

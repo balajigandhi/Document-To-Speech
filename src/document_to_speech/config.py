@@ -61,7 +61,7 @@ class Config(BaseModel):
     optimize_text: bool = True
     text_optimization_model: TextOptimizationModel = TextOptimizationModel.LOCAL_LLM
     openrouter_api_key: Optional[str] = None
-    openrouter_model: str = "anthropic/claude-3-opus"  # Default to Claude 3 Opus
+    openrouter_model: Optional[str] = "anthropic/claude-3-opus"
     text_model: Annotated[str, AfterValidator(validate_text_to_text_model)] = "bartowski/Qwen2.5-7B-Instruct-GGUF"
     tts_model: Annotated[str, AfterValidator(validate_text_to_speech_model)] = "hexgrad/Kokoro-82M"
     voice_profile: str = "en_neutral"

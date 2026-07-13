@@ -28,6 +28,7 @@ def clean_with_regex(text: str) -> str:
         text,
     )
     text = re.sub(r"[\w\.-]+@[\w\.-]+\.[\w]+", "", text)
+    text = re.sub(r"[-–—]", " ", text)  # hyphens/dashes to space before stripping
     text = re.sub(r'[^a-zA-Z0-9\s.,!?;:"\']', "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -55,9 +56,21 @@ def clean_html(text: str) -> str:
         str: The cleaned text.
     """
     soup = BeautifulSoup(text, "html.parser")
-    for tag in soup(["script", "style", "link", "meta"]):
+    for tag in soup(["script", "style", "link", "meta", "nav", "header", "footer"]):
         tag.decompose()
-    text = soup.get_text()
+    # Pad inline elements with spaces so adjacent spans don't merge words
+    for tag in soup.find_all(["span", "strong", "em", "b", "i", "a", "code", "mark"]):
+        if tag.string:
+            tag.string.replace_with(" " + tag.string + " ")
+    # Insert a pause marker after block elements so TTS pauses at section boundaries.
+    # A period followed by newlines causes the sentence splitter to break here and
+    # Kokoro to produce a natural breath between headings/paragraphs/list items.
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "td", "th", "blockquote", "pre", "div"]):
+        tag.append(". ")
+    text = soup.get_text(separator="\n")
+    # Collapse multiple spaces/newlines but keep sentence-ending punctuation
+    text = re.sub(r" {2,}", " ", text)
+    text = re.sub(r"\n+", " ", text)
     return clean_with_regex(text)
 
 

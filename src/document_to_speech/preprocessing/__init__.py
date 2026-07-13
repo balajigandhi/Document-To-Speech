@@ -17,4 +17,5 @@ DATA_CLEANERS = {
     ".md": clean_markdown,
     ".pdf": clean_with_regex,
     ".txt": clean_with_regex,
+    "url": clean_html,
 }
