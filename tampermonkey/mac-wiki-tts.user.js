@@ -291,6 +291,8 @@
       <button id="tts-speed" title="Cycle speed">1.25×</button>
       <div class="tts-divider"></div>
       <select id="tts-voice" title="Choose voice"></select>
+      <div class="tts-divider"></div>
+      <button id="tts-close" title="Close">✕</button>
     `;
 
     Object.assign(bar.style, {
@@ -314,6 +316,27 @@
     populateVoices();
     speechSynthesis.onvoiceschanged = populateVoices;
 
+    // Drag
+    bar.style.cursor = 'move';
+    let ox, oy;
+    bar.addEventListener('mousedown', e => {
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
+      ox = e.clientX - bar.getBoundingClientRect().left;
+      oy = e.clientY - bar.getBoundingClientRect().top;
+      let dragging = false;
+      const onMove = e => {
+        if (!dragging) { dragging = true; bar.style.right = 'auto'; }
+        bar.style.left = (e.clientX - ox) + 'px';
+        bar.style.top  = (e.clientY - oy) + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
     document.getElementById('tts-play').onclick = () => {
       if (speechSynthesis.paused) {
         speechSynthesis.resume();
@@ -327,6 +350,12 @@
     document.getElementById('tts-stop').onclick = () => {
       speechSynthesis.cancel();
       clearHighlight();
+    };
+
+    document.getElementById('tts-close').onclick = () => {
+      speechSynthesis.cancel();
+      clearHighlight();
+      bar.remove();
     };
 
     document.getElementById('tts-speed').onclick = () => {
