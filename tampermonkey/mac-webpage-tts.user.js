@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Mac Webpage TTS
 // @namespace    mac-tts-tools
-// @version      1.3.0
+// @version      1.4.0
 // @description  Text-to-speech reader for educative.io using macOS Web Speech API
 // @author       bgandhi
 // @match        https://www.educative.io/*
@@ -17,7 +17,9 @@
   let activeBlock = null;
   const RATES = [0.75, 1, 1.25, 1.5, 2];
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
+  let builtQueue = [];       // full queue, persisted after first build
+  let seekClickHandlers = []; // {el, fn} — cleaned up on stop/close
 
   // --- Content root ---
   const getArticle = () => {
@@ -116,6 +118,14 @@
       padding-left: 6px !important;
       border-radius: 2px;
       transition: background 0.2s;
+    }
+    .tts-seekable {
+      cursor: pointer;
+    }
+    .tts-seekable:hover {
+      background: rgba(26,115,232,0.07) !important;
+      border-left: 3px solid rgba(26,115,232,0.35) !important;
+      padding-left: 6px !important;
     }
     #tts-bar button, #tts-bar select {
       background: transparent; border: none; color: #fff;
@@ -230,11 +240,55 @@
     return queue;
   };
 
+  // --- Seek click handlers ---
+  const clearSeekHandlers = () => {
+    seekClickHandlers.forEach(({ el, fn }) => {
+      el.removeEventListener('click', fn);
+      el.classList.remove('tts-seekable');
+    });
+    seekClickHandlers = [];
+  };
+
+  const attachSeekHandlers = (queue) => {
+    clearSeekHandlers();
+    // Map each unique blockEl to the first queue index where it appears
+    const seen = new Map();
+    queue.forEach((item, i) => {
+      if (item.type === 'text' && item.blockEl && !seen.has(item.blockEl)) {
+        seen.set(item.blockEl, i);
+      }
+    });
+    seen.forEach((startIdx, el) => {
+      el.classList.add('tts-seekable');
+      const fn = () => speakFrom(startIdx);
+      el.addEventListener('click', fn);
+      seekClickHandlers.push({ el, fn });
+    });
+  };
+
   // --- Speak ---
+  const speakFrom = (startIdx) => {
+    speechSynthesis.cancel();
+    clearHighlight();
+    const voice = getSelectedVoice();
+    builtQueue.slice(startIdx).forEach(item => {
+      if (item.type === 'pause') { speechSynthesis.speak(item.utterance); return; }
+      const u = new SpeechSynthesisUtterance(preprocessText(item.content));
+      u.lang = 'en-US';
+      u.rate = currentRate * (item.rateMultiplier || 1);
+      u.pitch = item.pitch || 1;
+      if (voice) u.voice = voice;
+      u.onstart = () => highlightBlock(item.blockEl);
+      speechSynthesis.speak(u);
+    });
+  };
+
   const buildAndSpeak = () => {
     speechSynthesis.cancel();
     const voice = getSelectedVoice();
     const queue = buildQueue();
+    builtQueue = queue;
+    attachSeekHandlers(queue);
 
     // Prepend h1 + description paragraph that live outside the content root
     getHeaderEls().forEach((el, i) => {
@@ -314,9 +368,13 @@
       if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
       ox = e.clientX - bar.getBoundingClientRect().left;
       oy = e.clientY - bar.getBoundingClientRect().top;
+      const startX = e.clientX, startY = e.clientY;
       let dragging = false;
       const onMove = e => {
-        if (!dragging) { dragging = true; bar.style.right = 'auto'; }
+        if (!dragging) {
+          if (Math.abs(e.clientX - startX) < 4 && Math.abs(e.clientY - startY) < 4) return;
+          dragging = true; bar.style.right = 'auto';
+        }
         bar.style.left = (e.clientX - ox) + 'px';
         bar.style.top  = (e.clientY - oy) + 'px';
       };
@@ -334,7 +392,7 @@
     };
     document.getElementById('tts-pause').onclick = () => speechSynthesis.pause();
     document.getElementById('tts-stop').onclick  = () => { speechSynthesis.cancel(); clearHighlight(); };
-    document.getElementById('tts-close').onclick = () => { speechSynthesis.cancel(); clearHighlight(); bar.remove(); };
+    document.getElementById('tts-close').onclick = () => { speechSynthesis.cancel(); clearHighlight(); clearSeekHandlers(); bar.remove(); };
     document.getElementById('tts-speed').onclick = () => {
       const btn = document.getElementById('tts-speed');
       const idx = RATES.indexOf(currentRate);
